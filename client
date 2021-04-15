@@ -11,7 +11,7 @@ statusFailed=$(red "[ failed ]")
 
 branch="master"
 
-installCMD="bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10290/client)"
+installCMD="bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10284/client)"
 
 mirrorSite=$(echo $installCMD | awk '{print$5}' | sed 's?/client)??')
 
