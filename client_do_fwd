@@ -7,7 +7,7 @@ red()    { echo -e "\033[31m\033[01m $1 \033[0m"; }
 
 
 
-installCMD="bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10290/client_do)"
+installCMD="bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10284/client_do)"
 
 mirrorSite=$(echo $installCMD | awk '{print$5}' | sed 's?/client_do)??')
 
