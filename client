@@ -206,7 +206,7 @@ net.ipv4.tcp_low_latency = 1
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.neigh.default.gc_thresh1 = 1024
 net.ipv4.neigh.default.gc_thresh2 = 2048
-net.ipv4.neigh.default.gc_thresh3 = 4095
+net.ipv4.neigh.default.gc_thresh3 = 4096
 EOF
 
 sed -i "/net.core.default_qdisc/d" /etc/sysctl.conf
@@ -947,8 +947,8 @@ systemctl daemon-reload >/dev/null 2>&1
 fi
 
 popupWindow="window.open('"http://$localaddr:3000"', 'popupWindow', 'width=800, height=600, scrollbars=yes');"
-sed -i "/popupWindow/c\$popupWindow" /var/www/html/!ddns.php
-sed -i "/popupWindow/c\$popupWindow" /var/www/html/!update.php
+sed -i "/popupWindow/c\\$popupWindow" /var/www/html/!ddns.php
+sed -i "/popupWindow/c\\$popupWindow" /var/www/html/!update.php
 }
 
 
@@ -1305,7 +1305,7 @@ if [[ $(systemctl is-active smartdns) = "active" ]]; then
 elif [[ ! -f "/usr/sbin/smartdns" ]]; then
     echo "[$statusBAD] SmartDNS       [not Installed]"
 else
-    echo "[$statusBAD] SmartDNS       [start failed]"
+    echo "[$statusBAD] SmartDNS       [start folded]"
 fi
 
 if [[ $(systemctl is-active doh-client) = "active" ]]; then
