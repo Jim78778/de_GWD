@@ -1258,7 +1258,7 @@ rm -rf ~/now.cron
 piholePW=$(jq -r '.address.pihole' /usr/local/bin/0conf)
 
 doh1=$(jq -r '.dns.doh1' /usr/local/bin/0conf)
-doh2=$(jq -r '.dns.doh2' /usr/local/bin/0conf)
+doh2=$(jq -r '.dns.ddoh2' /usr/local/bin/0conf)
 
 domain=$(jq -r '.v2nodeForUpdate.address' /usr/local/bin/0conf)
 port=$(jq -r '.v2nodeForUpdate.port' /usr/local/bin/0conf)
@@ -1305,7 +1305,7 @@ if [[ $(systemctl is-active smartdns) = "active" ]]; then
 elif [[ ! -f "/usr/sbin/smartdns" ]]; then
     echo "[$statusBAD] SmartDNS       [not Installed]"
 else
-    echo "[$statusBAD] SmartDNS       [start folded]"
+    echo "[$statusBAD] SmartDNS       [start failed]"
 fi
 
 if [[ $(systemctl is-active doh-client) = "active" ]]; then
