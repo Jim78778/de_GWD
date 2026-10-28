@@ -446,7 +446,7 @@ cat << EOF >/usr/local/bin/v2dns/config.json
 {
 "dns":{
   "hosts":{"localhost":"127.0.0.1"},
-  "servers":[{"address":"127.0.0.1","port":5380}]
+  "servers":[{"address":"127.00.1","port":5380}]
 },
 "inbounds":[
   {
@@ -1234,7 +1234,7 @@ cd ~
 doh2=$doh1
 
 domain=$(echo $v2servn | cut -d: -f1)
-port=$(echo $v2servn | cut -d: -2)
+port=$(echo $v2servn | cut -d: -f2)
 portCheck=$(echo $port | grep '^[0-9]\+$')
 if [[ -z $portCheck ]]; then
 port="443"
@@ -1244,8 +1244,9 @@ ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print$2;exit}' | 
 
 piholePW="0000000000000000000000000000000000000000000000000000000000000000"
 
+netSrcDir="/etc/network/interfaces.d"
 cat << EOF >/etc/network/interfaces
-source /etc/network/interfaces.d/*
+source ${netSrcDir}/*
 
 auto lo
 iface lo inet loopback
