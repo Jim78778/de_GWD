@@ -13,6 +13,25 @@ repoRoot="https://raw.githubusercontent.com/${repoOwner}/${repoName}/${branch}"
 repoRes="${repoRoot}/resource"
 nginxImg="de_gwd/nginx:latest"
 
+# ===== apt 源兼容性 =====
+# buster 及更早版本已 EOL、主镜像已下线，需走 archive；
+# bullseye 起 security suite 命名由 "codename/updates" 改为 "codename-security"。
+codename=$(sed -n 's/^VERSION="[0-9]* (\(.*\))"/\1/p' /etc/os-release)
+case "$codename" in
+  jessie|stretch|buster)
+    aptArchived=1
+    aptMain_deb="http://archive.debian.org/debian"
+    aptSec_deb="http://archive.debian.org/debian-security"
+    secSuite="${codename}/updates"
+    ;;
+  *)
+    aptArchived=0
+    aptMain_deb="http://deb.debian.org/debian"
+    aptSec_deb="http://deb.debian.org/debian-security"
+    secSuite="${codename}-security"
+    ;;
+esac
+
 # 从本仓库 Dockerfile 本地构建 nginx（替代已失效的 jacyl4/nginx_tls1.3）；
 # 构建失败时回退到官方 nginx:stable（同样原生支持 TLS 1.3）。
 ensureNginxImage(){
@@ -71,9 +90,9 @@ EOF
 
 rm -rf /etc/apt/sources.list.d/*
 cat << EOF >/etc/apt/sources.list
-deb http://deb.debian.org/debian/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main contrib non-free
-deb http://security.debian.org/debian-security $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)/updates main contrib non-free
-deb http://deb.debian.org/debian/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)-updates main contrib non-free
+deb $aptMain_deb $codename main contrib non-free
+deb $aptSec_deb $secSuite main contrib non-free
+deb $aptMain_deb $codename-updates main contrib non-free
 EOF
 
 apt update && apt upgrade && apt autoremove && apt autoclean
@@ -82,7 +101,7 @@ apt install sudo locales net-tools netcat dnsutils resolvconf wget curl rsync gi
 source /etc/profile
 systemctl enable --now haveged >/dev/null 2>&1
 
-echo "deb [arch=amd64] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" > /etc/apt/sources.list.d/docker.list
+echo "deb [arch=amd64] https://download.docker.com/linux/debian $codename stable" > /etc/apt/sources.list.d/docker.list
 curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add -
 
 apt update && apt install docker-ce docker-ce-cli containerd.io
@@ -866,7 +885,7 @@ cd ~
 v2uuids=$(cat /proc/sys/kernel/random/uuid)
 v2path="/$(echo $v2uuids | awk '{print substr($0,length($1)-5)}')"
 
-ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print $2}' | cut -d':' -f1 | cut -d'@' -f1 | awk 'NR==1{print}')
+ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print$2}' | cut -d':' -f1 | cut -d'@' -f1 | awk 'NR==1{print}')
 localaddr=$(ip a | grep "$ethernetnum" | awk '{print $2}' | awk 'END {print}' | cut -d'/' -f1)
 gatewayaddr=$(ip route show | awk '/'$ethernetnum'/ {print$3;exit}')
 
@@ -952,7 +971,7 @@ update-grub
 
 cat << EOF >~/bbrkernel/clearkernel
 #!/bin/bash
-PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin/bin'
 
 sed -i "/net.core.default_qdisc/d" /etc/sysctl.conf
 sed -i "/net.ipv4.tcp_congestion_control/d" /etc/sysctl.conf
@@ -963,7 +982,6 @@ sysctl -p
 crontab -l > ~/now.cron
 sed -i '/clearkernel/d' ~/now.cron
 crontab ~/now.cron
-rm -rf ~/now.cron
 rm -rf ~/bbrkernel
 
 systemctl restart sshd
@@ -1252,7 +1270,7 @@ nginxWebConf
 postInstall
 
 blue "---------------------"
-blue  "Update de_GWD [done]"
+blue "Update de_GWD [done]"
 blue "---------------------"
 }
 
