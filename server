@@ -4,23 +4,14 @@ blue()   { echo -e "\033[34m\033[01m $1 \033[0m"; }
 yellow() { echo -e "\033[33m\033[01m $1 \033[0m"; }
 green()  { echo -e "\033[32m\033[01m $1 \033[0m"; }
 red()    { echo -e "\033[31m\033[01m $1 \033[0m"; }
-statuSuccess=$(green "[ OK ]")
-statusFailed=$(red "[ failed ]")
 
-
-
-branch="master"
-
-# ===== 本仓库地址（不再依赖已失效的上游 jacyl4/de_GWD 与镜像站 gwd.seso.icu）=====
+# ===== 本仓库地址（不再依赖已失效的上游 jacyl4/de_GWD）=====
 repoOwner="Jim78778"
 repoName="de_GWD"
+branch="master"
 repoRoot="https://raw.githubusercontent.com/${repoOwner}/${repoName}/${branch}"
 repoRes="${repoRoot}/resource"
 nginxImg="de_gwd/nginx:latest"
-
-installCMD="bash <(wget --no-check-certificate -qO- ${repoRoot}/server)"
-
-mirrorSite="$repoRoot"
 
 # 从本仓库 Dockerfile 本地构建 nginx（替代已失效的 jacyl4/nginx_tls1.3）；
 # 构建失败时回退到官方 nginx:stable（同样原生支持 TLS 1.3）。
@@ -38,39 +29,70 @@ nginxImg="nginx:stable"
 rm -rf /tmp/de_gwd_nginx
 }
 
-# 下载 WebUI 所需的 ui-script / ui-web（GitHub 已移除 SVN 支持，改用 git）。
-# 优先 partial clone 仅拉取所需目录（约11MB）；失败则回退整包 tarball。
-fetchUI(){
-cd ~
-rm -rf ~/ui-script ~/ui-web ~/de_GWD_src
-if git clone --depth 1 --filter=blob:none --no-checkout \
-     "https://github.com/${repoOwner}/${repoName}.git" ~/de_GWD_src >/dev/null 2>&1; then
-  cd ~/de_GWD_src
-  git config core.sparseCheckout true
-  printf 'resource/ui-script/\nresource/ui-web/\n' > .git/info/sparse-checkout
-  if git checkout >/dev/null 2>&1; then
-    cp -rf resource/ui-script ~/ui-script
-    cp -rf resource/ui-web ~/ui-web
-  fi
-  cd ~
-fi
-if [[ ! -d ~/ui-web/vendor ]]; then
-  rm -rf ~/ui-script ~/ui-web "de_GWD-${branch}"
-  wget --no-check-certificate -qO- \
-    "https://github.com/${repoOwner}/${repoName}/archive/refs/heads/${branch}.tar.gz" | tar xz
-  cp -rf "de_GWD-${branch}/resource/ui-script" ~/ui-script
-  cp -rf "de_GWD-${branch}/resource/ui-web" ~/ui-web
-  rm -rf "de_GWD-${branch}"
-fi
-rm -rf ~/de_GWD_src
-}
-
-
-
 export DEBIAN_FRONTEND=noninteractive
 
 
+
 preInstall(){
+if [[ $(free -m | awk 'NR==3{print$2}') = "0" ]]; then
+fallocate -l 1G /swapfile
+dd if=/dev/zero of=/swapfile bs=1k count=1024k status=progress
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+sed -i "/swapfile/d" /etc/fstab
+echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
+echo "RESUME=" > /etc/initramfs-tools/conf.d/resume
+fi
+
+systemctl mask --now systemd-resolved  >/dev/null 2>&1
+systemctl daemon-reload >/dev/null 2>&1
+
+rm -rf /etc/resolv.conf
+cat << EOF >/etc/resolv.conf
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 1.0.0.1
+nameserver 8.8.4.4
+EOF
+
+cat << EOF >/etc/apt/apt.conf.d/01InstallLess
+APT::Get::Assume-Yes "true";
+APT::Install-Recommends "false";
+APT::Install-Suggests "false";
+EOF
+
+cat << EOF >/etc/apt/apt.conf.d/71debconf
+Dpkg::Options {
+   "--force-confdef";
+   "--force-confold";
+};
+EOF
+
+rm -rf /etc/apt/sources.list.d/*
+cat << EOF >/etc/apt/sources.list
+deb http://deb.debian.org/debian/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main contrib non-free
+deb http://security.debian.org/debian-security $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)/updates main contrib non-free
+deb http://deb.debian.org/debian/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)-updates main contrib non-free
+EOF
+
+apt update && apt upgrade && apt autoremove && apt autoclean
+
+apt install sudo locales net-tools netcat dnsutils resolvconf wget curl rsync git jq unzip ca-certificates apt-transport-https gnupg2 haveged socat
+source /etc/profile
+systemctl enable --now haveged >/dev/null 2>&1
+
+echo "deb [arch=amd64] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" > /etc/apt/sources.list.d/docker.list
+curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add -
+
+apt update && apt install docker-ce docker-ce-cli containerd.io
+sed -i "/LimitNOFILE=/c\LimitNOFILE=1000000"  /lib/systemd/system/docker.service
+sed -i "/LimitNPROC=/c\LimitNPROC=64000"  /lib/systemd/system/docker.service
+systemctl daemon-reload >/dev/null 2>&1
+systemctl enable docker
+systemctl restart docker
+
+dpkg --configure -a
 
 cat << EOF >/etc/security/limits.conf
 * soft nofile 1000000
@@ -78,6 +100,9 @@ cat << EOF >/etc/security/limits.conf
 * soft nproc 64000
 * hard nproc 64000
 EOF
+echo "ulimit -n 1000000" > ~/.bash_profile
+
+modprobe ip_conntrack
 
 cat << EOF >/etc/sysctl.conf
 vm.overcommit_memory = 1
@@ -107,15 +132,6 @@ net.ipv4.conf.all.arp_ignore = 1
 net.ipv4.conf.default.arp_ignore = 1
 net.ipv4.conf.all.rp_filter = 1
 net.ipv4.conf.default.rp_filter = 1
-net.ipv4.conf.all.send_redirects = 1
-net.ipv4.conf.default.send_redirects = 1
-net.ipv4.conf.all.accept_redirects = 1
-net.ipv4.conf.default.accept_redirects = 1
-net.ipv4.conf.all.secure_redirects = 1
-net.ipv4.conf.default.secure_redirects = 1
-net.ipv4.conf.all.accept_source_route = 1
-net.ipv4.conf.default.accept_source_route = 1
-net.ipv4.ip_forward = 1
 net.ipv4.ip_local_port_range = 1024 65535
 net.ipv4.tcp_window_scaling = 1
 net.ipv4.tcp_fastopen = 3
@@ -140,11 +156,7 @@ net.ipv4.tcp_keepalive_probes = 5
 net.ipv4.tcp_rfc1337 = 1
 net.ipv4.tcp_low_latency = 1
 net.ipv4.tcp_slow_start_after_idle = 0
-net.ipv4.neigh.default.gc_thresh1 = 1024
-net.ipv4.neigh.default.gc_thresh2 = 2048
-net.ipv4.neigh.default.gc_thresh3 = 4096
 EOF
-
 
 sed -i "/net.core.default_qdisc/d" /etc/sysctl.conf
 sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
@@ -152,48 +164,121 @@ sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
 if [[ "$(uname -r)" =~ "bbrplus" ]]; then
 echo "net.core.default_qdisc = fq_codel" >> /etc/sysctl.conf
 echo "net.ipv4.tcp_congestion_control = bbrplus" >> /etc/sysctl.conf
+elif [[ $(uname -r | awk -F. '{print $1"."$2}') = "4.19" ]] || [[ $(echo "$(uname -r | awk -F. '{print $1"."$2}') > 4.19" | bc) -eq 1 ]]; then
+echo "net.core.default_qdisc = fq_codel" >> /etc/sysctl.conf
+echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
 else
 echo "net.core.default_qdisc = fq_codel" >> /etc/sysctl.conf
 echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
 fi
-
 sysctl -p
+
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+cat << EOF >/etc/default/locale
+LANG=en_US.UTF-8
+LANGUAGE=en_US.UTF-8
+LC_CTYPE="en_US.UTF-8"
+LC_NUMERIC="en_US.UTF-8"
+LC_TIME="en_US.UTF-8"
+LC_COLLATE="en_US.UTF-8"
+LC_MONETARY="en_US.UTF-8"
+LC_MESSAGES="en_US.UTF-8"
+LC_PAPER="en_US.UTF-8"
+LC_NAME="en_US.UTF-8"
+LC_ADDRESS="en_US.UTF-8"
+LC_TELEPHONE="en_US.UTF-8"
+LC_MEASUREMENT="en_US.UTF-8"
+LC_IDENTIFICATION="en_US.UTF-8"
+LC_ALL=en_US.UTF-8
+EOF
+locale-gen en_US.UTF-8
+
+echo "Asia/Shanghai" > /etc/timezone
+ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+
+date -s "$(wget -qSO- --max-redirect=0 google.com 2>&1 | grep Date: | cut -d' ' -f5-8)Z"
+hwclock -w
 }
 
 
 
-installDep(){
-rm -rf /etc/apt/sources.list.d/docker.list
+installIptablesRules(){
+cat << EOF >/usr/local/bin/iptablesrules-up
+#!/bin/bash
+iptables -A INPUT -p tcp --tcp-flags ALL NONE -j DROP
+iptables -A INPUT -p tcp --tcp-flags RST RST -j DROP
 
-cat << EOF >/etc/apt/sources.list
-deb http://deb.debian.org/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main contrib non-free
-deb http://deb.debian.org/debian-security/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)/updates main contrib non-free
-deb http://deb.debian.org/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)-updates main contrib non-free
+iptables -A INPUT -p udp --dport 53 -s 127.0.0.1,172.17.0.0/24,172.16.66.0/24 -j ACCEPT
+iptables -A INPUT -p tcp --dport 53 -s 127.0.0.1,172.17.0.0/24,172.16.66.0/24 -j ACCEPT
+
+iptables -A INPUT -p udp --dport 53 -i $ethernetnum -j DROP
+iptables -A INPUT -p tcp --dport 53 -i $ethernetnum -j DROP
+EOF
+chmod +x /usr/local/bin/iptablesrules-up
+
+cat << EOF >/usr/local/bin/iptablesrules-down
+#!/bin/bash
+iptables -F
+iptables -X
+EOF
+chmod +x /usr/local/bin/iptablesrules-down
+
+cat << EOF >/lib/systemd/system/iptablesrules.service
+[Unit]
+Description=iptablesrules
+After=network.target
+
+[Service]
+User=root
+Type=oneshot
+ExecStart=/bin/bash /usr/local/bin/iptablesrules-up
+ExecStop=/bin/bash /usr/local/bin/iptablesrules-down
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-echo "deb [arch=amd64] https://download.docker.com/linux/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) stable" > /etc/apt/sources.list.d/docker.list
-curl -fsSL https://download.docker.com/linux/debian/gpg | apt-key add -
-
-echo "deb https://packages.sury.org/php/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main" > /etc/apt/sources.list.d/php.list
-wget -qO /etc/apt/trusted.gpg.d/php.gpg https://packages.sury.org/php/apt.gpg
-
-if [[ `dpkg -l | grep php | awk '{print $2}' | grep fpm` != "php7.4-fpm" ]]; then
-rm -rf /etc/php/7.3/
-apt purge `dpkg -l | grep php7.3| awk '{print $2}' | tr "\n" " "`
-fi
-
-apt update && apt upgrade && apt autoremove && apt autoclean
-
-sed -i "/www-data/d" /etc/sudoers
-sed -i "/Allow members of group sudo to execute any command/a\www-data ALL=(root)  NOPASSWD:ALL" /etc/sudoers
-
-apt install docker-ce docker-ce-cli containerd.io php7.4-fpm php7.4-common php7.4-cgi php7.4-xml php7.4-opcache php7.4-json php7.4-sqlite3 php-intl sqlite3 resolvconf
-
-sed -i "/LimitNOFILE=/c\LimitNOFILE=1000000"  /lib/systemd/system/docker.service
-sed -i "/LimitNPROC=/c\LimitNPROC=64000"  /lib/systemd/system/docker.service
 systemctl daemon-reload >/dev/null 2>&1
-systemctl enable docker
-systemctl restart docker
+systemctl enable iptablesrules
+systemctl restart iptablesrules
+}
+
+
+
+installPihole(){
+export PIHOLE_SKIP_OS_CHECK=true
+mkdir -p /etc/pihole
+cat /dev/null > /etc/pihole/adlists.list
+cat << EOF >/etc/pihole/setupVars.conf
+PIHOLE_INTERFACE=$ethernetnum
+IPV4_ADDRESS=$localaddr/24
+PIHOLE_DNS_1=1.1.1.1
+PIHOLE_DNS_2=8.8.8.8
+PIHOLE_DNS_3=1.0.0.1
+PIHOLE_DNS_4=8.8.4.4
+QUERY_LOGGING=false
+INSTALL_WEB_SERVER=false
+INSTALL_WEB_INTERFACE=false
+LIGHTTPD_ENABLED=false
+BLOCKING_ENABLED=true
+WEBPASSWORD=0000000000000000000000000000000000000000000000000000000000000000
+DNSMASQ_LISTENING=single
+DNS_FQDN_REQUIRED=true
+DNS_BOGUS_PRIV=true
+DNSSEC=false
+CONDITIONAL_FORWARDING=false
+EOF
+
+curl -sSL https://install.pi-hole.net | bash /dev/stdin --unattended
+}
+
+
+
+piholeSet(){
+systemctl mask --now lighttpd
+systemctl mask --now dhcpcd
+systemctl daemon-reload >/dev/null 2>&1
 
 rm -rf /etc/resolv.conf
 rm -rf /run/resolvconf/interface
@@ -203,77 +288,67 @@ cat /dev/null > /etc/resolvconf/resolv.conf.d/tail
 ln -s /etc/resolvconf/run/resolv.conf /etc/resolv.conf
 resolvconf -u
 
-cat << EOF >/etc/php/7.4/fpm/php-fpm.conf
-[global]
-pid = /run/php/php-fpm.pid
-error_log = /var/log/php-fpm.log
-
-include=/etc/php/7.4/fpm/pool.d/*.conf
+cat << EOF >/etc/pihole/pihole-FTL.conf
+PRIVACYLEVEL=0
+AAAA_QUERY_ANALYSIS=no
 EOF
 
-cat << EOF >/etc/php/7.4/fpm/pool.d/www.conf
-[www]
-user = www-data
-group = www-data
-listen = /run/php/php-fpm.sock
-listen.allowed_clients = 127.0.0.1
-listen.backlog = 65536
-listen.mode = 0666
+pihole logging off
+}
 
-pm = dynamic
-pm.max_children = 50
-pm.start_servers = 12
-pm.min_spare_servers = 12
-pm.max_spare_servers = 24
-pm.max_requests = 1000
 
-catch_workers_output = yes
-clear_env = no
-env[HOSTNAME] = \$HOSTNAME
-env[PATH] = /usr/local/bin:/usr/bin:/bin
-env[TMP] = /tmp
-env[TMPDIR] = /tmp
-env[TEMP] = /tmp
-php_value[upload_max_filesize] = 1G
-php_value[post_max_size] = 1G
-php_admin_value[memory_limit] = 512M
+
+installDOHser(){
+rm -rf /usr/local/bin/doh-server
+
+wget -O ~/doh.zip ${repoRoot}/resource/dohamd64.zip
+unzip ~/doh.zip -d ~/
+mv -f ~/doh/doh-server /usr/local/bin/doh-server
+chmod +x /usr/local/bin/doh-server
+rm -rf ~/doh*
+
+mkdir -p /etc/dns-over-https
+cat << EOF >/etc/dns-over-https/doh-server.conf
+listen = [ "127.0.0.1:8053" ]
+
+path = "/dq"
+
+upstream = [ "udp:127.0.0.1:53" ]
+
+timeout = 10
+tries = 3
+verbose = false
+log_guessed_client_ip = false
 EOF
 
-sed -i "/engine =/c\engine = off" /etc/php/7.4/fpm/php.ini
-sed -i "/disable_functions =/c\disable_functions =" /etc/php/7.4/fpm/php.ini
-sed -i "/^upload_max_filesize/c\upload_max_filesize = 1G" /etc/php/7.4/fpm/php.ini
-sed -i "/^post_max_size/c\post_max_size = 1G" /etc/php/7.4/fpm/php.ini
-sed -i "/^max_input_time/c\max_input_time = 3600" /etc/php/7.4/fpm/php.ini
-sed -i "/^max_execution_time/c\max_execution_time = 3600" /etc/php/7.4/fpm/php.ini
-sed -i "/^memory_limit/c\memory_limit = 512m" /etc/php/7.4/fpm/php.ini
-sed -i "s/^zend_extension/;&/" /etc/php/7.4/fpm/php.ini
-sed -i "s/^opcache/;&/" /etc/php/7.4/fpm/php.ini
-
-cat << EOF >/etc/php/7.4/mods-available/opcache.ini
-; configuration for php opcache module
-; priority=10
-zend_extension=opcache.so
-opcache.enable=1
-opcache.enable_cli=1
-opcache.memory_consumption=128
-opcache.interned_strings_buffer=8
-opcache.max_accelerated_files=10000
-opcache.revalidate_freq=1
-opcache.fast_shutdown=1
-opcache.save_comments=1
+mkdir -p /etc/NetworkManager/dispatcher.d
+cat << "EOF" > /etc/NetworkManager/dispatcher.d/doh-server
+#!/bin/bash
+case "$2" in
+    up)
+        /usr/bin/systemctl is-active doh-server.service >/dev/null && /usr/bin/systemctl restart doh-server.service
+        ;;
+    down)
+        /usr/bin/systemctl is-active doh-server.service >/dev/null && /usr/bin/systemctl restart doh-server.service
+        ;;
+    *)
+        exit 0
+        ;;
+esac
 EOF
+chmod +x /etc/NetworkManager/dispatcher.d/doh-server
 
-rm -rf /lib/systemd/system/php*-fpm.service
-cat << "EOF" > /lib/systemd/system/php7.4-fpm.service
+cat << "EOF" > /lib/systemd/system/doh-server.service
 [Unit]
-Description=The PHP 7.4 FastCGI Process Manager
+Description=DNS-over-HTTPS server
 After=network.target
 
 [Service]
-Type=notify
-PIDFile=/run/php/php-fpm.pid
-ExecStart=/usr/sbin/php-fpm7.4 --nodaemonize --fpm-config /etc/php/7.4/fpm/php-fpm.conf
-ExecReload=/bin/kill -USR2 $MAINPID
+User=root
+Type=simple
+LimitNPROC=64000
+LimitNOFILE=1000000
+ExecStart=/usr/local/bin/doh-server -conf /etc/dns-over-https/doh-server.conf
 Restart=always
 RestartSec=2
 StartLimitBurst=0
@@ -283,16 +358,100 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload >/dev/null 2>&1
-systemctl enable php7.4-fpm
-systemctl restart php7.4-fpm
+systemctl enable doh-server
+systemctl restart doh-server
 }
 
 
 
-nginxSet(){
+installV2ray(){
+rm -rf /usr/local/bin/vtrui
+rm -rf /etc/vtrui
+mkdir -p /usr/local/bin/vtrui
+mkdir -p ~/vtrui
+wget -O ~/vtrui.zip ${repoRoot}/resource/vtamd64.zip
+unzip ~/vtrui.zip -d ~/vtrui
+cp -f ~/vtrui/v2ray /usr/local/bin/vtrui/vtrui
+cp -f ~/vtrui/v2ctl /usr/local/bin/vtrui/v2ctl
+chmod +x /usr/local/bin/vtrui/vtrui
+chmod +x /usr/local/bin/vtrui/v2ctl
+rm -rf ~/vtrui*
+
+cat << EOF >/usr/local/bin/vtrui/config.json
+{
+  "dns":{"servers":["localhost"]},
+  "inbounds": [
+    {
+    "port":11811,
+    "listen":"127.0.0.1",
+    "protocol":"vmess",
+    "settings":{
+      "clients":[]
+      },
+    "streamSettings": {
+      "network":"ws",
+      "wsSettings":{"path":"/0000"}
+      }
+    }
+  ],
+  "outbounds": [
+  {"protocol":"freedom","settings":{"domainStrategy":"UseIPv4"}}
+  ]
+}
+EOF
+
+
+{
+for v2uuids in $v2uuids; do
+echo '{"id": "'$v2uuids'", "level": 1, "alterId": 64}'
+done
+} >/tmp/v2clients
+
+
+cat /tmp/v2clients | while read v2clients
+do
+jq --argjson v2clients "$v2clients" '.inbounds[0].settings.clients+=[$v2clients]' /usr/local/bin/vtrui/config.json >/tmp/vtrui_temp && mv -f /tmp/vtrui_temp /usr/local/bin/vtrui/config.json
+done
+rm -rf /tmp/v2clients
+
+jq --arg v2path "$v2path" '.inbounds[0].streamSettings.wsSettings.path=$v2path' /usr/local/bin/vtrui/config.json >/tmp/vtrui_temp && mv -f /tmp/vtrui_temp /usr/local/bin/vtrui/config.json
+
+cat << "EOF" > /lib/systemd/system/vtrui.service
+[Unit]
+Description=vtrui Service
+After=network.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+User=root
+Type=simple
+LimitNPROC=64000
+LimitNOFILE=1000000
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+ExecStart=/usr/local/bin/vtrui/vtrui -config /usr/local/bin/vtrui/config.json
+Restart=always
+RestartSec=2
+StartLimitBurst=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable vtrui
+systemctl restart vtrui
+
+rm -rf /usr/bin/vtrui
+}
+
+
+
+installNginx(){
 mkdir -p "/etc/nginx"
 mkdir -p "/etc/nginx/conf.d"
 mkdir -p "/var/log/nginx"
+mkdir -p "/var/www/html"
+mkdir -p "/var/www/ssl"
 
 rm -rf /etc/nginx/nginx.conf
 cat << EOF >/etc/nginx/nginx.conf
@@ -376,770 +535,855 @@ http {
 EOF
 
 rm -rf /etc/nginx/conf.d/default.conf
-cat << EOF >/etc/nginx/conf.d/default.conf
-server {
-  listen       80 default_server;
-  listen       [::]:80 default_server;
-  server_name  localhost;
-  root         /var/www/html;
-  index        index.php index.html index.htm;
+cat /dev/null > /etc/nginx/conf.d/default.conf
 
-  location ~ /\.(?!well-known).* {
-    deny all;
-  }
-
-  location ~ [^/]\.php(/|$) {
-    fastcgi_pass unix:/run/php/php-fpm.sock;
-    fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-    fastcgi_index index.php;
-    include fastcgi_params;
-  }
-}
-EOF
-}
-
-
-
-installNginx(){
 docker stop nginx >/dev/null 2>&1
 docker rm nginx >/dev/null 2>&1
 
 ensureNginxImage
 
+if [[ -d "/etc/php" ]]; then
+mkdir -p /run/php
+chown -R www-data:www-data /run/php
+
+docker run -d --name=nginx --net=host --restart=always \
+-v /etc/localtime:/etc/localtime \
+-v /etc/nginx/nginx.conf:/etc/nginx/nginx.conf \
+-v /etc/nginx/conf.d/default.conf:/etc/nginx/conf.d/default.conf \
+-v /run/php/:/run/php/ \
+-v /var/www/html/:/var/www/html/ \
+-v /var/www/ssl/:/var/www/ssl/ \
+$nginxImg
+else
 docker run -d --name=nginx --net=host --restart=always \
 -v /etc/localtime:/etc/localtime \
 -v /etc/nginx/nginx.conf:/etc/nginx/nginx.conf \
 -v /etc/nginx/conf.d/default.conf:/etc/nginx/conf.d/default.conf \
 -v /var/www/html/:/var/www/html/ \
--v /run/php/:/run/php/ \
+-v /var/www/ssl/:/var/www/ssl/ \
 $nginxImg
+fi
 }
 
 
 
+makeSSL_D(){
+rm -rf /var/www/ssl/*
+export CF_Key="$CFapikey"
+export CF_Email="$CFemail"
 
-installWebUI(){
-cd ~
-fetchUI
+curl https://get.acme.sh | sh
+~/.acme.sh/acme.sh --upgrade  --auto-upgrade
+~/.acme.sh/acme.sh --issue --dns dns_cf -d $topDomain -d *.$topDomain --keylength ec-256
+~/.acme.sh/acme.sh --installcert -d $topDomain --ecc \
+               --key-file       /var/www/ssl/$topDomain.key  \
+               --fullchain-file /var/www/ssl/$topDomain.cer \
+               --reloadcmd     "docker restart nginx >/dev/null 2>&1"
+openssl dhparam -out /var/www/ssl/dhparam.pem 2048
 
-if [[ -f ~/ui-script/ui_am4 ]] && [[ -d ~/ui-web/vendor ]]; then
-rm -rf /usr/local/bin/ui-*
-rm -rf /usr/local/bin/ui_*
-rm -rf /var/www/html/restore/*
-rm -rf /var/www/html/*.php
-rm -rf /var/www/html/vendor
-rm -rf /var/www/html/css
-rm -rf /var/www/html/js
+cat << EOF >/var/www/ssl/update_ocsp_cache
+#!/bin/bash
+wget -O ~/intermediate.pem https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem
+wget -O ~/root.pem https://ssl-tools.net/certificates/dac9024f54d8f6df94935fb1732638ca6ad77c13.pem
+mv ~/intermediate.pem /var/www/ssl
+mv ~/root.pem /var/www/ssl
+cat /var/www/ssl/intermediate.pem > /var/www/ssl/bundle.pem
+cat /var/www/ssl/root.pem >> /var/www/ssl/bundle.pem
 
-rsync -azrI ~/ui-script/* /usr/local/bin
-rsync -azrI ~/ui-web/* /var/www/html
-rm -rf ~/ui-script
-rm -rf ~/ui-web
-fi
-
-wget --no-check-certificate -c ${repoRoot}/version.php
-mv -f ~/version.php /var/www/html/version.php
-
-mkdir -p /var/www/html/restore
-chown -R www-data:www-data /var/www/html
-chmod +x /var/www/html/*
-chmod +x /usr/local/bin/*
-
-wget --no-check-certificate -c -O ~/ttyd ${repoRes}/ttyd_linux.x86_64
-
-if [ $(ls -l ~/ttyd | awk '{print$5}') -gt 2000000 ]; then
-mv -f ~/ttyd /usr/local/bin/ttyd
-chmod +x /usr/local/bin/ttyd
-
-cat << EOF >/lib/systemd/system/updateGWD.service
-[Unit]
-Description=ttyd
-After=network.target
-
-[Service]
-User=root
-Type=oneshot
-ExecStart=/bin/bash /usr/local/bin/ui-update
-KillMode=process
-
-[Install]
-WantedBy=multi-user.target
+openssl ocsp -no_nonce \
+    -issuer  /var/www/ssl/intermediate.pem \
+    -cert    /var/www/ssl/$topDomain.cer \
+    -CAfile  /var/www/ssl/bundle.pem \
+    -VAfile  /var/www/ssl/bundle.pem \
+    -url     http://ocsp.int-x3.letsencrypt.org \
+    -respout /var/www/ssl/ocsp.resp
 EOF
-systemctl daemon-reload >/dev/null 2>&1
-fi
+chmod +x /var/www/ssl/update_ocsp_cache
+/var/www/ssl/update_ocsp_cache
 
-popupWindow="window.open('"http://$localaddr:3000"', 'popupWindow', 'width=800, height=600, scrollbars=yes');"
-sed -i "/popupWindow/c\$popupWindow" /var/www/html/!ddns.php
-sed -i "/popupWindow/c\$popupWindow" /var/www/html/!update.php
+crontab -l > ~/now.cron
+sed -i '/\/var\/www\/ssl\/update_ocsp_cache/d' ~/now.cron
+echo '0 0 * * 6 /var/www/ssl/update_ocsp_cache' >> ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
 }
 
 
 
+makeSSL_W(){
+rm -rf /etc/nginx/conf.d/default.conf
+cat << EOF >/etc/nginx/conf.d/default.conf
+server {
+    listen      80;
+    server_name $domain;
+    root        /var/www/html;
+    index       index.php index.html index.htm;
+}
+EOF
+docker restart nginx
 
-installSample(){
+rm -rf /var/www/ssl/*
 
-wget --no-check-certificate -O ~/sample.tar.gz $repoRes/sample.tar.gz
-tar xzvf ~/sample.tar.gz -C ~/
+curl https://get.acme.sh | sh
+~/.acme.sh/acme.sh --upgrade  --auto-upgrade
+~/.acme.sh/acme.sh --issue -d $domain -w /var/www/html --keylength ec-256
+~/.acme.sh/acme.sh --installcert -d $domain --ecc \
+               --key-file       /var/www/ssl/$domain.key  \
+               --fullchain-file /var/www/ssl/$domain.cer \
+               --reloadcmd     "docker restart nginx >/dev/null 2>&1"
+openssl dhparam -out /var/www/ssl/dhparam.pem 2048
 
-rm -rf /usr/local/bin/0conf
-mv -f ~/sample/0conf /usr/local/bin/0conf
+cat << EOF >/var/www/ssl/update_ocsp_cache
+#!/bin/bash
+wget -O ~/intermediate.pem https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem
+wget -O ~/root.pem https://ssl-tools.net/certificates/dac9024f54d8f6df94935fb1732638ca6ad77c13.pem
+mv ~/intermediate.pem /var/www/ssl
+mv ~/root.pem /var/www/ssl
+cat /var/www/ssl/intermediate.pem > /var/www/ssl/bundle.pem
+cat /var/www/ssl/root.pem >> /var/www/ssl/bundle.pem
 
-rm -rf /usr/local/bin/dnsmasq_bypass.conf
-mv -f ~/sample/dnsmasq_bypass.conf /usr/local/bin/dnsmasq_bypass.conf
+openssl ocsp -no_nonce \
+    -issuer  /var/www/ssl/intermediate.pem \
+    -cert    /var/www/ssl/$domain.cer \
+    -CAfile  /var/www/ssl/bundle.pem \
+    -VAfile  /var/www/ssl/bundle.pem \
+    -url     http://ocsp.int-x3.letsencrypt.org \
+    -respout /var/www/ssl/ocsp.resp
+EOF
+chmod +x /var/www/ssl/update_ocsp_cache
+/var/www/ssl/update_ocsp_cache
 
-rm -rf /var/www/html/restore
-mkdir -p /var/www/html/restore
-mv -f ~/sample/restore/* /var/www/html/restore/
+crontab -l > ~/now.cron
+sed -i '/\/var\/www\/ssl\/update_ocsp_cache/d' ~/now.cron
+echo '0 0 * * 6 /var/www/ssl/update_ocsp_cache' >> ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
+}
 
-rm -rf /var/www/html/!ddns.php
-mv -f ~/sample/!ddns.php /var/www/html/!ddns.php
 
-rm -rf /var/www/html/!update.php
-mv -f ~/sample/!update.php /var/www/html/!update.php
 
+nginxWebConf(){
+touch /etc/nginx/conf.d/supp_head
+touch /etc/nginx/conf.d/supp_body
+
+if [[ -n $portCheck ]] && [[ $portCheck != "443" ]]; then
+
+cat << EOF >/etc/nginx/conf.d/1_serverHead
+server {
+  listen $port ssl http2 fastopen=128 reuseport;
+  server_name $domain;
+  root $htmldir;
+  index index.php index.html index.htm;
+
+  ssl_certificate /var/www/ssl/$topDomain.cer;
+  ssl_certificate_key /var/www/ssl/$topDomain.key;
+EOF
+
+else
+
+cat << EOF >/etc/nginx/conf.d/1_serverHead
+server {
+  listen 80;
+  server_name $domain;
+  return 301 https://\$server_name\$request_uri;
+}
+
+server {
+  listen 443 ssl http2 fastopen=128 reuseport;
+  server_name $domain;
+  root $htmldir;
+  index index.php index.html index.htm;
+
+  ssl_certificate /var/www/ssl/$domain.cer;
+  ssl_certificate_key /var/www/ssl/$domain.key;
+EOF
+
+fi
+
+cat << EOF >/etc/nginx/conf.d/2_tlsParameter
+  ssl_dhparam /var/www/ssl/dhparam.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_prefer_server_ciphers on;
+  ssl_ciphers TLS13+AESGCM+AES128:TLS13+AESGCM+AES256:TLS13+CHACHA20:EECDH+ECDSA+AESGCM+AES128:EECDH+ECDSA+CHACHA20:EECDH+ECDSA+AESGCM+AES256:EECDH+ECDSA+AES128+SHA:EECDH+ECDSA+AES256+SHA:EECDH+aRSA+AESGCM+AES128:EECDH+aRSA+CHACHA20:EECDH+aRSA+AESGCM+AES256:EECDH+aRSA+AES128+SHA:EECDH+aRSA+AES256+SHA:RSA+AES128+SHA:RSA+AES256+SHA:RSA+3DES;
+  ssl_session_timeout 10m;
+  ssl_session_cache builtin:1000 shared:SSL:10m;
+  ssl_buffer_size 4k;
+
+  ssl_early_data on;
+  proxy_set_header Early-Data \$ssl_early_data;
+
+  ssl_stapling on;
+  ssl_stapling_verify on;
+  ssl_stapling_file /var/www/ssl/ocsp.resp;
+
+  add_header Referrer-Policy "no-referrer" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Download-Options "noopen" always;
+  add_header X-Frame-Options "SAMEORIGIN" always;
+  add_header X-Permitted-Cross-Domain-Policies "none" always;
+  add_header X-Robots-Tag "none" always;
+  add_header X-XSS-Protection "1; mode=block" always;
+  add_header Strict-Transport-Security "max-age=63072000" always;
+
+  location ~ /\.(?!well-known).* {
+    deny all;
+  }
+
+EOF
+
+cat << EOF >/etc/nginx/conf.d/3_proxyPath
+location /dq {
+  proxy_pass                http://127.0.0.1:8053/dq;
+  proxy_set_header          Host \$host;
+  proxy_set_header          X-Real-IP \$remote_addr;
+}
+
+location $v2path {
+  proxy_pass                http://127.0.0.1:11811;
+  proxy_http_version        1.1;
+  proxy_set_header          Host \$http_host;
+  proxy_set_header          Upgrade "WebSocket";
+  proxy_set_header          Connection "upgrade";
+  proxy_set_header          X-Real-IP \$remote_addr;
+  proxy_set_header          X-Forwarded-For \$proxy_add_x_forwarded_for;
+  proxy_connect_timeout     432000;
+  proxy_send_timeout        432000;
+  proxy_read_timeout        432000;
+  proxy_redirect            off;
+  proxy_buffering           off;
+  proxy_buffer_size         4k;
+}
+}
+EOF
+
+cat << EOF >/etc/nginx/conf.d/merge.sh
+#!/bin/bash
+rm -rf /etc/nginx/conf.d/default.conf
+
+cat /etc/nginx/conf.d/supp_head > /etc/nginx/conf.d/default.conf
+cat /etc/nginx/conf.d/1_serverHead >> /etc/nginx/conf.d/default.conf
+cat /etc/nginx/conf.d/2_tlsParameter >> /etc/nginx/conf.d/default.conf
+cat /etc/nginx/conf.d/supp_body >> /etc/nginx/conf.d/default.conf
+cat /etc/nginx/conf.d/3_proxyPath >> /etc/nginx/conf.d/default.conf
+
+docker restart nginx
+EOF
+chmod +x /etc/nginx/conf.d/merge.sh
+/etc/nginx/conf.d/merge.sh
+}
+
+
+
+postInstall(){
+cat << "EOF" > /usr/local/bin/autoUpdate
+#!/bin/bash
+repoRoot="https://raw.githubusercontent.com/Jim78778/de_GWD/master"
+wget -O ~/update ${repoRoot}/server
+sed -i '$d' ~/update
+echo "updateGWD" >>  ~/update
+chmod +x ~/update
+~/update
+
+crontab -l > ~/now.cron
+sed -i '/autoUpdate/d' ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
+rm -rf ~/update
+EOF
+chmod +x /usr/local/bin/autoUpdate
+
+cat << "EOF" > /usr/local/bin/Q2H
+#!/bin/bash
+repoRoot="https://raw.githubusercontent.com/Jim78778/de_GWD/master"
+date -s "$(wget -qSO- --max-redirect=0 google.com 2>&1 | grep Date: | cut -d' ' -f5-8)Z"
+hwclock -w
+
+rm -rf ~/server*
+rm -rf /var/log/*1
+rm -rf /var/log/*2
+rm -rf /var/log/*gz
+
+localVer=$(awk 'NR==1' /usr/local/bin/version.php)
+remoteVer=$(curl -s ${repoRoot}/version.php | awk 'NR==1')
+
+if [[ $localVer != $remoteVer ]]; then
+crontab -l > ~/now.cron
+sed -i '/autoUpdate/d' ~/now.cron
+echo '30 4 * * *  /usr/local/bin/autoUpdate' >> ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
+fi
+EOF
+chmod +x /usr/local/bin/Q2H
+
+crontab -l > ~/now.cron
+sed -i '/\/usr\/local\/bin\/Q2H/d' ~/now.cron
+echo '0 */2 * * * /usr/local/bin/Q2H' >> ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
+
+indexpage=$(ls /var/www/html/index.* 2>/dev/null | wc -l)
+if [ "$indexpage" = "0" ]; then 
+wget ${repoRoot}/resource/sample.zip
+unzip sample.zip
+rsync -azrI ~/sample/* /var/www/html/
 rm -rf ~/sample*
-
-chmod 666 /usr/local/bin/0conf
-}
-
-
-
-installIptables(){
-
-if [[ $bbr = "bbrplus" ]]; then
-wget --no-check-certificate -O ~/linux-headers.deb $repoRes/bbrplus/linux-headers-4.14.161-bbrplus_4.14.161-1_amd64.deb
-wget --no-check-certificate -O ~/linux-image.deb $repoRes/bbrplus/linux-image-4.14.161-bbrplus_4.14.161-1_amd64.deb
-
-dpkg -i ~/linux-headers.deb
-dpkg -i ~/linux-image.deb
-
-rm -rf ~/linux-headers.deb ~/linux-image.deb
-
-elif [[ $bbr = "bbrplus_stretch" ]]; then
-wget --no-check-certificate -O ~/linux-headers.deb $repoRes/bbrplus/linux-headers-4.14.161-bbrplus_4.14.161-1_amd64_stretch.deb
-wget --no-check-certificate -O ~/linux-image.deb $repoRes/bbrplus/linux-image-4.14.161-bbrplus_4.14.161-1_amd64_stretch.deb
-
-dpkg -i ~/linux-headers.deb
-dpkg -i ~/linux-image.deb
-
-rm -rf ~/linux-headers.deb ~/linux-image.deb
 fi
 
-if [[ $bbr = "bbrplus" ]] || [[ $bbr = "bbrplus_stretch" ]]; then
-mkdir -p /etc/default/grub
-cat << EOF >/etc/default/grub
-GRUB_DEFAULT="Advanced options for Debian GNU/Linux>Debian GNU/Linux, with Linux 4.14.161-bbrplus"
-GRUB_TIMEOUT=5
-GRUB_DISTRIBUTOR=`lsb_release -i -s 2> /dev/null || echo Debian`
-GRUB_CMDLINE_LINUX_DEFAULT="quiet"
-GRUB_CMDLINE_LINUX=""
-EOF
-
-update-grub
-fi
+wget -O /usr/local/bin/version.php ${repoRoot}/version.php
 }
 
 
 
 
 installGWD(){
+    green "=================="
+    green " Input VPS domain"
+    green "=================="
+    read vpsdomainP
+
+domain=$(echo $vpsdomainP | cut -d: -f1)
+port=$(echo $vpsdomainP | cut -d: -f2)
+portCheck=$(echo $port | grep '^[0-9]\+$')
+topDomain=$(echo $domain | rev | awk -F. '{print $1"."$2}' | rev)
+
+if [[ -n $portCheck ]] && [[ $portCheck != "443" ]]; then
+
+    green "==============================="
+    green " Cloudflare API KEY"
+    green "==============================="
+    read CFapikey
+
+    green "==============================="
+    green " Cloudflare Email"
+    green "==============================="
+    read CFemail
+
+fi
+
+cd ~
+
+v2uuids=$(cat /proc/sys/kernel/random/uuid)
+v2path="/$(echo $v2uuids | awk '{print substr($0,length($1)-5)}')"
+
+ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print $2}' | cut -d':' -f1 | cut -d'@' -f1 | awk 'NR==1{print}')
+localaddr=$(ip a | grep "$ethernetnum" | awk '{print $2}' | awk 'END {print}' | cut -d'/' -f1)
+gatewayaddr=$(ip route show | awk '/'$ethernetnum'/ {print$3;exit}')
+
+htmldir="/var/www/html"
 
 cat << EOF >/etc/network/interfaces
 source /etc/network/interfaces.d/*
 
 auto lo
 iface lo inet loopback
+
+auto $ethernetnum
+iface $ethernetnum inet static
+  address $localaddr
+  netmask 255.255.255.0
+  gateway $gatewayaddr
 EOF
-
-apt update && apt install -y sudo locales net-tools dnsutils ipset wget curl git jq unzip ca-certificates haveged subversion rsync sqlite3
-
-clear
-
-    green "==============================="
-    green "         SERVER"
-    green "Recommend: Debian 10 (amd64)"
-    green "Author:    JacyL4"
-    green "==============================="
-    echo ""
-    green "1. Install de_GWD"
-    echo ""
-    read -p "Select:" num
-    case "$num" in
-    1)
-    ;;
-    *)
-    clear
-    red "Wrong number"
-    sleep 1s
-    installGWD
-    ;;
-    esac
-
-    green "==============================="
-    green "   Select congestion algorithm"
-    green "==============================="
-    echo ""
-    green "1. BBR"
-    yellow "2. BBRplus (Debian 10)"
-    yellow "3. BBRplus (Debian 9)"
-    echo ""
-    read -p "Select:" num
-    case "$num" in
-    1)
-    bbr="bbr"
-    ;;
-    2)
-    bbr="bbrplus"
-    ;;
-    3)
-    bbr="bbrplus_stretch"
-    ;;
-    *)
-    clear
-    red "Wrong number"
-    sleep 1s
-    installGWD
-    ;;
-    esac
-
-    green "========================="
-    green " de_GWD local IP address"
-    green "========================="
-    read localaddr
-
-    green "========================="
-    green " DoH"
-    green "========================="
-    read doh1
-
-    green "========================="
-    green " V2ray domain"
-    green "========================="
-    read v2servn
-
-    green "========================="
-    green " V2ray UUID"
-    green "========================="
-    read uuidnum
-
-    green "========================="
-    green " Path"
-    green "========================="
-    read v2path
-
-    green "========================="
-    green " Frp Server Port"
-    green "========================="
-    read frpPort
-
-    green "========================="
-    green " Frp Server Token"
-    green "========================="
-    read frpToken
-
-    green "========================="
-    green " Frp Port Protocol"
-    green "========================="
-    echo ""
-    green "1. TCP"
-    yellow "2. KCP"
-    echo ""
-    read -p "Select:" frpProtocol
-
-    case "$frpProtocol" in
-    1)
-    frpProtocol="TCP"
-    ;;
-    2)
-    frpProtocol="KCP"
-    ;;
-    *)
-    clear
-    red "Wrong number"
-    sleep 1s
-    installGWD
-    ;;
-    esac
-
-cd ~
-
-doh2=$doh1
-
-domain=$(echo $v2servn | cut -d: -f1)
-port=$(echo $v2servn | cut -d: -f2)
-portCheck=$(echo $port | grep '^[0-9]\+$')
-if [[ -z $portCheck ]]; then
-port="443"
-fi
-
-if [[ $frpProtocol = "TCP" ]]; then
-frp_bind_port="bind_port = $frpPort"
-elif [[ $frpProtocol = "KCP" ]]; then
-frp_bind_port=`cat << EOF
-bind_port = $frpPort
-kcp_bind_port = $frpPort
-EOF
-`
-fi
 
 preInstall
 
-installIptables
+installIptablesRules
 
-installDep
+installPihole
 
-nginxSet
+piholeSet
+
+sed -i "/static ip_address=/d" /etc/dhcpcd.conf
+sed -i "/static routers=/d" /etc/dhcpcd.conf
+sed -i "/static domain_name_servers=/d" /etc/dhcpcd.conf
+
+echo -e "static ip_address=$localaddr/32" >> /etc/dhcpcd.conf
+echo -e "static routers=$gatewayaddr" >> /etc/dhcpcd.conf
+echo -e "static domain_name_servers=127.0.0.1" >> /etc/dhcpcd.conf
+
+installDOHser
+
+installV2ray
+
+if [[ -n $portCheck ]] && [[ $portCheck != "443" ]]; then
 
 installNginx
 
-installWebUI
+makeSSL_D
+
+nginxWebConf
+
+else
+
+installNginx
+
+makeSSL_W
+
+nginxWebConf
+
+fi
+
+postInstall
+
+blue "---------------------------------------------"
+blue  "Install de_GWD [done]"
+echo ""
+blue "DoH:    $(yellow "$vpsdomainP/dq")"
+blue "Domain: $(yellow "$vpsdomainP")"
+blue "UUID:   $(yellow "$v2uuids")"
+blue "PATH:   $(yellow "$v2path")"
+blue "---------------------------------------------"
+}
 
 
-mkdir -p /usr/local/bin/frp
 
-wget --no-check-certificate -O ~/frp.tar.gz $repoRes/frp_linux_amd64.tar.gz
-tar xzvf ~/frp.tar.gz
-mv -f ~/frp_*/frps /usr/local/bin/frp/frps
+installBBRplus(){
+apt install wget
+mkdir -p ~/bbrkernel && cd ~/bbrkernel
+wget --no-check-certificate ${repoRoot}/resource/linux-headers-4.14.168-bbrplus_4.14.168-bbrplus-1-$(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)_amd64.deb
+wget --no-check-certificate ${repoRoot}/resource/linux-image-4.14.168-bbrplus_4.14.168-bbrplus-1-$(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)_amd64.deb
+dpkg -i linux-headers-*.deb
+dpkg -i linux-image-*.deb
 
-cat << EOF >/usr/local/bin/frp/frps.ini
-[common]
-bind_addr = 0.0.0.0
-$frp_bind_port
-token = $frpToken
+export DEBIAN_FRONTEND=noninteractive
+apt purge -y linux-image-amd64
+apt purge -y linux-image-*-amd64
+update-grub
+
+cat << EOF >~/bbrkernel/clearkernel
+#!/bin/bash
+PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+
+sed -i "/net.core.default_qdisc/d" /etc/sysctl.conf
+sed -i "/net.ipv4.tcp_congestion_control/d" /etc/sysctl.conf
+echo "net.core.default_qdisc = fq_codel" >> /etc/sysctl.conf
+echo "net.ipv4.tcp_congestion_control = bbrplus" >> /etc/sysctl.conf
+sysctl -p
+
+crontab -l > ~/now.cron
+sed -i '/clearkernel/d' ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
+rm -rf ~/bbrkernel
+
+systemctl restart sshd
 EOF
 
-cat << EOF >/lib/systemd/system/frps.service
-[Unit]
-Description=Frp Server Service
-After=network.target
+chmod +x ~/bbrkernel/clearkernel
 
-[Service]
-User=root
-Type=simple
-LimitNPROC=64000
-LimitNOFILE=1000000
-CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
-ExecStart=/usr/local/bin/frp/frps -c /usr/local/bin/frp/frps.ini
-Restart=always
-RestartSec=2
-StartLimitBurst=0
+crontab -l > ~/now.cron
+echo '@reboot ~/bbrkernel/clearkernel' >> ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
 
-[Install]
-WantedBy=multi-user.target
-EOF
-
-chmod -R 755 /usr/local/bin/frp
-chown -R root:root /usr/local/bin/frp
-
-systemctl daemon-reload
-systemctl enable frps
-systemctl restart frps
-
-rm -rf ~/frp*
+reboot
+blue "-----------------------"
+blue  "Install bbrplus [done]"
+blue "-----------------------"
+}
 
 
 
-mkdir -p /usr/local/bin/frpc
+changeStaticIP(){
+    green "========="
+    green "Address"
+    green "========="
+    read localaddr
 
-wget --no-check-certificate -O ~/frp.tar.gz $repoRes/frp_linux_amd64.tar.gz
-tar xzvf ~/frp.tar.gz
-mv -f ~/frp_*/frpc /usr/local/bin/frpc/frpc
+    green "========="
+    green "Gateway"
+    green "========="
+    read gatewayaddr
 
-cat << EOF >/usr/local/bin/frpc/frpc.ini
-[common]
-server_addr = $localaddr
-server_port = $frpPort
-token = $frpToken
+sed -i "/address/c\address $localaddr"  /etc/network/interfaces
+sed -i "/gateway/c\gateway $gatewayaddr"  /etc/network/interfaces
+sed -i "/IPV4_ADDRESS=/c\IPV4_ADDRESS=$localaddr/24"  /etc/pihole/setupVars.conf
 
-[ssh]
-type = tcp
-local_ip = 127.0.0.1
-local_port = 22
-remote_port = $sshPort
-EOF
+sed -i "/static ip_address=/d" /etc/dhcpcd.conf
+sed -i "/static routers=/d" /etc/dhcpcd.conf
+sed -i "/static domain_name_servers=/d" /etc/dhcpcd.conf
 
-cat << EOF >/lib/systemd/system/frpc.service
-[Unit]
-Description=Frp Client Service
-After=network.target
+echo -e "static ip_address=$localaddr/32" >> /etc/dhcpcd.conf
+echo -e "static routers=$gatewayaddr" >> /etc/dhcpcd.conf
+echo -e "static domain_name_servers=127.0.0.1" >> /etc/dhcpcd.conf
 
-[Service]
-User=root
-Type=simple
-LimitNPROC=64000
-LimitNOFILE=1000000
-CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
-ExecStart=/usr/local/bin/frpc/frpc -c /usr/local/bin/frpc/frpc.ini
-Restart=always
-RestartSec=2
-StartLimitBurst=0
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-chmod -R 755 /usr/local/bin/frpc
-chown -R root:root /usr/local/bin/frpc
-
-systemctl daemon-reload
-systemctl enable frpc
-systemctl restart frpc
-
-rm -rf ~/frp*
+reboot
+blue "-----------------"
+blue  "Change IP [done]"
+blue "-----------------"
+}
 
 
 
-wget --no-check-certificate -O ~/v2ray.zip $repoRes/v2amd64.zip
-unzip ~/v2ray.zip -d ~/
+changeDomain(){
+    green "=================="
+    green " Input new domain"
+    green "=================="
+    read vpsdomainP
 
-mkdir -p /usr/local/bin/v2ray
-mv -f ~/v2ray/v2ray /usr/local/bin/v2ray/v2ray
-mv -f ~/v2ray/v2ctl /usr/local/bin/v2ray/v2ctl
-chmod +x /usr/local/bin/v2ray/v2ray
-chmod +x /usr/local/bin/v2ray/v2ctl
+domain=$(echo $vpsdomainP | cut -d: -f1)
+port=$(echo $vpsdomainP | cut -d: -f2)
+portCheck=$(echo $port | grep '^[0-9]\+$')
+topDomain=$(echo $domain | rev | awk -F. '{print $1"."$2}' | rev)
 
-cat << EOF >/usr/local/bin/v2ray/config.json
-{
-"log":{"loglevel":"warning"},
-"dns":{"servers":["1.1.1.1","8.8.8.8","localhost"]},
-"inbounds":[
-  {
-    "port":443,
+htmldir=$(awk '/root/ {print$2;exit}' /etc/nginx/conf.d/default.conf | cut -d';' -f1)
+
+if [[ -n $portCheck ]] && [[ $portCheck != "443" ]]; then
+
+    green "==============================="
+    green " Cloudflare API KEY"
+    green "==============================="
+    read CFapikey
+
+    green "==============================="
+    green " Cloudflare Email"
+    green "==============================="
+    read CFemail
+
+fi
+
+v2path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' /usr/local/bin/vtrui/config.json)
+
+if [[ -n $portCheck ]] && [[ $portCheck != "443" ]]; then
+makeSSL_D
+else
+makeSSL_W
+fi
+
+nginxWebConf
+
+blue "-----------------------------------------------"
+blue "Change domain and issue new certificates [done]"
+blue "-----------------------------------------------"
+}
+
+
+
+changeV2rayVerify(){
+    green "=========="
+    green " New UUID"
+    green "=========="
+    read nuuid
+
+    green "=========="
+    green " New path"
+    green "=========="
+    read npath
+
+sed -i "$(sed -ne '/location/=' /etc/nginx/conf.d/default.conf | awk 'END{print}')s/.*/location "'\'$npath''" {/" /etc/nginx/conf.d/default.conf
+
+docker restart nginx >/dev/null 2>&1
+
+jq --arg nuuid "$nuuid" '.inbounds[0].settings.clients[0].id=$nuuid' /usr/local/bin/vtrui/config.json |\
+jq --arg npath "$npath" '.inbounds[0].streamSettings.wsSettings.path=$npath' >/tmp/vtrui_temp && mv -f /tmp/vtrui_temp /usr/local/bin/vtrui/config.json
+
+systemctl restart vtrui >/dev/null 2>&1
+blue "------------------------------"
+blue  "Change v2ray UUID&path [done]"
+blue "------------------------------"
+}
+
+
+
+changev2rayupstream(){
+    green "==================================================="
+    green "Y. Change v2ray upstream / N. Delete v2ray upstream"
+    green "==================================================="
+    read v2rayupstreamyn
+
+if [[ "$v2rayupstreamyn" = "Y" ]] || [[ "$v2rayupstreamyn" = "y" ]]; then
+sed -i '/"outbounds":/,$d' /usr/local/bin/vtrui/config.json
+
+    green "=========================="
+    green "v2ray upstream domain:port"
+    green "=========================="
+    read upstreamDomainP
+
+    green "=========================="
+    green "v2ray upstream UUID"
+    green "=========================="
+    read upstreamUUID
+
+    green "=========================="
+    green "v2ray upstream path"
+    green "=========================="
+    read upstreamPath
+
+domain=$(echo $upstreamDomainP | cut -d: -f1)
+port=$(echo $upstreamDomainP | cut -d: -f2)
+
+portCheck=$(echo $port | grep '^[0-9]\+$')
+if [[ $portCheck = "" ]] || [[ $portCheck = "443" ]]; then
+port="443"
+fi
+
+cat >> /usr/local/bin/vtrui/config.json << EOF
+  "outbounds": [
+    {
     "protocol":"vmess",
-    "settings":{"clients":[
-      {
-        "id":"$uuidnum",
-        "alterId":8,
-        "security":"none"
-      }
-    ]},
+    "settings":{"vnext":[{
+      "address":"$domain",
+      "port":$port,
+      "users":[{
+        "id":"$upstreamUUID",
+          "level":1,
+          "alterId":8,
+          "security":"none"
+        }]
+      }]},
     "streamSettings":{
       "network":"ws",
       "wsSettings":{
-        "path":"/$v2path"
-      },
+        "path":"$upstreamPath",
+        "headers":{
+          "Host":"$domain"
+          }
+        },
       "security":"tls",
       "tlsSettings":{
-        "certificates":[
-          {
-            "certificateFile":"/etc/nginx/cert/$domain.crt",
-            "keyFile":"/etc/nginx/cert/$domain.key"
-          }
-        ]
+        "serverName":"$domain",
+        "allowInsecure":false
+        }
       }
     }
-  }
-],
-"outbounds":[
-  {"protocol":"freedom"},
-  {"protocol":"blackhole"}
-]
+  ]
 }
 EOF
+systemctl restart vtrui
+blue "-----------------------------"
+blue  "Change v2ray upstream [done]"
+blue "-----------------------------"
 
-cat << EOF >/lib/systemd/system/v2ray.service
-[Unit]
-Description=v2ray Service
-After=network.target nss-lookup.target
-Wants=network-online.target
-
-[Service]
-User=root
-Type=simple
-LimitNPROC=64000
-LimitNOFILE=1000000
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_NET_ADMIN
-ExecStart=/usr/local/bin/v2ray/v2ray -config /usr/local/bin/v2ray/config.json
-Restart=always
-RestartSec=2
-StartLimitBurst=0
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-chmod -R 755 /usr/local/bin/v2ray
-chown -R root:root /usr/local/bin/v2ray
-
-systemctl daemon-reload
-systemctl enable v2ray
-systemctl restart v2ray
-
-rm -rf ~/v2ray*
-
-
-
-mkdir -p /etc/nginx/cert
-
-openssl req -new -newkey rsa:2048 -nodes \
-  -keyout /etc/nginx/cert/$domain.key \
-  -out /etc/nginx/cert/$domain.csr \
-  -subj "/C=CN/ST=Shanghai/L=Shanghai/O=$domain/OU=$domain/CN=$domain"
-
-openssl x509 -req -days 3650 \
-  -in /etc/nginx/cert/$domain.csr \
-  -signkey /etc/nginx/cert/$domain.key \
-  -out /etc/nginx/cert/$domain.crt
-
-rm -rf /etc/nginx/cert/$domain.csr
-
-
-
-rm -rf /etc/nginx/conf.d/default.conf
-cat << EOF >/etc/nginx/conf.d/default.conf
-server {
-    listen 80 default_server;
-    listen [::]:80 default_server;
-    server_name $domain;
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl default_server;
-    listen [::]:443 ssl default_server;
-    server_name $domain;
-
-    ssl_certificate     /etc/nginx/cert/$domain.crt;
-    ssl_certificate_key /etc/nginx/cert/$domain.key;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
-    ssl_prefer_server_ciphers on;
-
-    location / {
-        root /var/www/html;
-        index index.php index.html index.htm;
-    }
-
-    location ~ [^/]\.php(/|$) {
-        fastcgi_pass unix:/run/php/php-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        fastcgi_index index.php;
-        include fastcgi_params;
-    }
-
-    location /$v2path {
-        proxy_redirect off;
-        proxy_pass http://127.0.0.1:40000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
+elif [[ "$v2rayupstreamyn" = "N" ]] || [[ "$v2rayupstreamyn" = "n" ]]; then
+sed -i '/"outbounds":/,$d' /usr/local/bin/vtrui/config.json
+cat >> /usr/local/bin/vtrui/config.json << EOF
+  "outbounds": [
+  {"protocol":"freedom","settings":{"domainStrategy":"UseIPv4"}}
+  ]
 }
 EOF
-
-
-
-installSample
-
-
-
-mkdir -p /usr/local/bin/DoH
-
-wget --no-check-certificate -O ~/doh.zip $repoRes/dohamd64.zip
-unzip ~/doh.zip -d ~/doh
-
-mv -f ~/doh/doh-server /usr/local/bin/DoH/doh-server
-chmod +x /usr/local/bin/DoH/doh-server
-
-cat << EOF >/usr/local/bin/DoH/doh-server.conf
-listen = [
-  "127.0.0.1:8000",
-  "[::1]:8000",
-  "$localaddr:8000"
-]
-
-[upstream]
-upstream_selector = "weighted_round_robin"
-
-# Google
-[[upstream.upstream_ietf]]
-    url = "https://dns.google/dns-query"
-    weight = 100
-
-# Cloudflare
-[[upstream.upstream_ietf]]
-    url = "https://cloudflare-dns.com/dns-query"
-    weight = 100
-
-# Quad9
-[[upstream.upstream_ietf]]
-    url = "https://dns.quad9.net/dns-query"
-    weight = 50
-
-[others]
-bootstrap = ["8.8.8.8:53", "223.5.5.5:53"]
-timeout = 30
-no_cookies = true
-no_ecs = false
-no_ipv6 = true
-verbose = false
-EOF
-
-cat << EOF >/lib/systemd/system/doh-server.service
-[Unit]
-Description=DNS-over-HTTPS Server
-After=network.target
-
-[Service]
-User=root
-Type=simple
-LimitNPROC=64000
-LimitNOFILE=1000000
-ExecStart=/usr/local/bin/DoH/doh-server -conf /usr/local/bin/DoH/doh-server.conf
-Restart=always
-RestartSec=2
-StartLimitBurst=0
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable doh-server
-systemctl restart doh-server
-
-rm -rf ~/doh*
-
-
-
-cat << EOF >/etc/dnsmasq.d/doh.conf
-server=$localaddr#8000
-EOF
-
-
-
-cat << EOF >/usr/local/bin/autoUpdate
-#!/bin/bash
-repoRoot="https://raw.githubusercontent.com/Jim78778/de_GWD/master"
-version=$(curl -s $repoRoot/version.php | awk -F'\n' '{print $1}')
-nowVersion=$(cat /var/www/html/version.php | awk -F'\n' '{print $1}')
-if [[ $version != $nowVersion ]]; then
-  wget --no-check-certificate -qO- $repoRoot/server | bash
+systemctl restart vtrui
+blue "-----------------------------"
+blue  "Delete v2ray upstream [done]"
+blue "-----------------------------"
 fi
-EOF
-chmod +x /usr/local/bin/autoUpdate
+}
 
 
-cat << EOF >/lib/systemd/system/autoUpdate.service
-[Unit]
-Description=autoUpdate
-After=network.target
 
-[Service]
-User=root
-Type=simple
-ExecStart=/usr/local/bin/autoUpdate
-Restart=always
-RestartSec=2
+updatePihole(){
+ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print$2;exit}' | cut -d':' -f1 | cut -d'@' -f1)
+localaddr=$(ip a | grep "$ethernetnum" | awk '{print $2}' | awk 'END {print}' | cut -d'/' -f1)
 
-[Install]
-WantedBy=multi-user.target
+rm -rf /etc/resolv.conf
+cat << EOF >/etc/resolv.conf
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 1.0.0.1
+nameserver 8.8.4.4
 EOF
 
-systemctl daemon-reload
-systemctl enable autoUpdate
-systemctl restart autoUpdate
+date -s "$(wget -qSO- --max-redirect=0 google.com 2>&1 | grep Date: | cut -d' ' -f5-8)Z"
+hwclock -w
 
-
-
-
-cat << EOF >/usr/local/bin/Q2H
-#!/bin/bash
-repoRoot="https://raw.githubusercontent.com/Jim78778/de_GWD/master"
-version=$(curl -s $repoRoot/version.php | awk -F'\n' '{print $1}')
-nowVersion=$(cat /var/www/html/version.php | awk -F'\n' '{print $1}')
-if [[ $version != $nowVersion ]]; then
-  echo 1 | wget --no-check-certificate -qO- $repoRoot/server | bash
-fi
-EOF
-chmod +x /usr/local/bin/Q2H
-
-
-cat << EOF >/lib/systemd/system/Q2H.service
-[Unit]
-Description=Q2H
-After=network.target
-
-[Service]
-User=root
-Type=simple
-ExecStart=/usr/local/bin/Q2H
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+rm -rf /etc/dnsmasq* /etc/.pihole /etc/pihole /opt/pihole /usr/bin/pihole-FTL /usr/local/bin/pihole /var/www/html/pihole /var/www/html/admin
 
 systemctl daemon-reload
 
+installPihole
 
-
+piholeSet
 
 blue "---------------------"
-blue "Install de_GWD [done]"
+blue "Update Pi-hole [done]"
 blue "---------------------"
 }
 
 
 
+updateGWD(){
+if [[ -f /etc/vtrui/config.json ]]; then
+  mkdir -p /usr/local/bin/vtrui
+  cp -f /etc/vtrui/config.json /usr/local/bin/vtrui/config.json
+  rm -rf /etc/vtrui
+fi
+rm -rf /etc/modules-load.d/nf_conntrack.conf
+
+
+
+ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print$2;exit}' | cut -d':' -f1 | cut -d'@' -f1)
+localaddr=$(ip a | grep "$ethernetnum" | awk '{print $2}' | awk 'END {print}' | cut -d'/' -f1)
+
+domain=$(awk '/server_name/ {print$2;exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
+port=$(awk '/ssl http2 fastopen=128 reuseport/ {print$2}' /etc/nginx/conf.d/default.conf)
+portCheck=$(echo $port | grep '^[0-9]\+$')
+topDomain=$(echo $domain | rev | awk -F. '{print $1"."$2}' | rev)
+
+v2uuids=$(jq -r '.inbounds[0].settings.clients[].id' /usr/local/bin/vtrui/config.json)
+v2path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' /usr/local/bin/vtrui/config.json)
+
+htmldir=$(awk '/root/ {print$2;exit}' /etc/nginx/conf.d/default.conf | cut -d';' -f1)
+
+if [[ -f /var/www/ssl/fullchain.cer ]]; then
+  if [[ -n $portCheck ]] && [[ $portCheck != "443" ]]; then
+  mv -f /var/www/ssl/fullchain.cer /var/www/ssl/$topDomain.cer
+  else
+  mv -f /var/www/ssl/fullchain.cer /var/www/ssl/$domain.cer
+  fi
+fi
+
+cd ~
+source /etc/profile
+
+preInstall
+
+installIptablesRules
+
+piholeSet
+
+installDOHser
+
+installV2ray
+
+installNginx
+
+nginxWebConf
+
+postInstall
+
+blue "---------------------"
+blue  "Update de_GWD [done]"
+blue "---------------------"
+}
+
+
+
+printNode(){
+vpsdomain=$(awk '/server_name/ {print$2;exit}' /etc/nginx/conf.d/default.conf | sed 's/.$//')
+port=$(awk '/ssl http2 fastopen=128 reuseport/ {print$2}' /etc/nginx/conf.d/default.conf)
+
+if [[ $port = "443" ]]; then
+vpsdomainP=$vpsdomain
+else
+vpsdomainP=$vpsdomain:$port
+fi
+
+v2uuids=$(jq -r '.inbounds[0].settings.clients[].id' /usr/local/bin/vtrui/config.json)
+v2path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' /usr/local/bin/vtrui/config.json)
+
+blue "---------------------------------------------"
+green "V2ray node information"
+echo ""
+blue "DoH:    $(yellow "$vpsdomainP/dq")"
+blue "Domain: $(yellow "$vpsdomainP")"
+blue "UUID:   $(yellow "$v2uuids")"
+blue "PATH:   $(yellow "$v2path")"
+blue "---------------------------------------------"
+}
+
+
+
+autoUpdateGWD(){
+    green "=============================================="
+    green "Y. Turn on AutoUpdate / N. Turn off AutoUpdate"
+    green "=============================================="
+    read autoUpdateswitch
+
+if [[ "$autoUpdateswitch" = "Y" ]] || [[ "$autoUpdateswitch" = "y" ]]; then 
+sed -i '/localVer=/,$d' /usr/local/bin/Q2H
+
+cat << "EOF" >> /usr/local/bin/Q2H
+localVer=$(awk 'NR==1' /usr/local/bin/version.php)
+remoteVer=$(curl -s ${repoRoot}/version.php | awk 'NR==1')
+
+if [[ $localVer != $remoteVer ]]; then
+crontab -l > ~/now.cron
+sed -i '/autoUpdate/d' ~/now.cron
+echo '30 4 * * *  /usr/local/bin/autoUpdate' >> ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
+fi
+EOF
+blue "--------------------------"
+blue  "AutoUpdate turn on [done]"
+blue "--------------------------"
+
+elif [[ "$autoUpdateswitch" = "N" ]] || [[ "$autoUpdateswitch" = "n" ]]; then
+sed -i '/localVer=/,$d' /usr/local/bin/Q2H
+
+crontab -l > ~/now.cron
+sed -i '/autoUpdate/d' ~/now.cron
+crontab ~/now.cron
+rm -rf ~/now.cron
+
+blue "---------------------------"
+blue  "AutoUpdate turn off [done]"
+blue "---------------------------"
+fi
+}
 
 
 
 start_menu(){
-
 statusGOOD=$(green "✓")
 statusBAD=$(red "✕")
+statusNONE=$(yellow "-")
 
-if [[ $(systemctl is-active v2ray) = "active" ]]; then
-    echo "[$statusGOOD] V2ray         [working]"
-elif [[ ! -f "/usr/local/bin/v2ray/v2ray" ]]; then
-    echo "[$statusBAD] V2ray         [not Installed]"
+if [[ $(systemctl is-active pihole-FTL) = "active" ]]; then
+    echo "[$statusGOOD] Pi-hole      [working]"
+elif [[ ! -f "/usr/local/bin/pihole" ]]; then
+    echo "[$statusBAD] Pi-hole      [not installed]"
 else
-    echo "[$statusBAD] V2ray         [start failed]"
+    echo "[$statusBAD] Pi-hole      [start failed]"
 fi
 
 if [[ $(systemctl is-active doh-server) = "active" ]]; then
-    echo "[$statusGOOD] DoH server    [working]"
-elif [[ ! -f "/usr/local/bin/DoH/doh-server" ]]; then
-    echo "[$statusBAD] DoH server    [not Installed]"
+    echo "[$statusGOOD] DoH server   [working]"
+elif [[ ! -f "/usr/local/bin/pihole" ]]; then
+    echo "[$statusBAD] DoH server   [not Installed]"
 else
-    echo "[$statusBAD] DoH server    [start failed]"
+    echo "[$statusBAD] DoH server   [start failed]"
 fi
 
-if [[ $(systemctl is-active php7.4-fpm) = "active" ]]; then
-    echo "[$statusGOOD] php7.4-FPM    [working]"
-elif [ ! -f "/etc/php/7.4/fpm/php-fpm.conf" ]; then
-    echo "[$statusBAD] php7.4-FPM    [not installed]"
+if [[ $(systemctl is-active vtrui) = "active" ]]; then
+    echo "[$statusGOOD] V2RAY        [working]"
+elif [[ ! -d "/usr/local/bin/vtrui" ]]; then
+    echo "[$statusBAD] V2RAY        [not Installed]"
 else
-    echo "[$statusBAD] php7.4-FPM    [start failed]"
+    echo "[$statusBAD] V2RAY        [start failed]"
 fi
 
 if [[ $(systemctl is-active docker) = "active" ]]; then
-    echo "[$statusGOOD] Docker        [working]"
+    echo "[$statusGOOD] Docker       [working]"
 elif [[ ! -f "/usr/bin/docker" ]]; then
-    echo "[$statusBAD] Docker        [not installed]"
+    echo "[$statusBAD] Docker       [not installed]"
 else
-    echo "[$statusBAD] Docker        [start failed]"
+    echo "[$statusBAD] Docker       [start failed]"
 fi
 
 blue "-----------------------------------------------"
 blue "Current tcp congestion control ：$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | cut -d' ' -f3) + $(sysctl net.core.default_qdisc 2>/dev/null | cut -d' ' -f3)"
 blue "-----------------------------------------------"
 
-
-    green "==============================="
-    green "           SERVER"
-    green "Recommend: Debian 10 (amd64)"
+    green "==========================="
+    green "       SERVER"
+    green "Recommend: Debian 10"
     green "Author:    JacyL4"
-    green "==============================="
+    green "==========================="
+if [[ -f "/usr/local/bin/version.php" ]]; then
+    blue  "Version:$(echo $(awk 'NR==1' /usr/local/bin/version.php))"
+fi
     echo ""
     green  "1. Install de_GWD"
-    yellow "2. Update de_GWD"
+    green  "2. Install bbrplus and reboot"
+    red    "5. Change static IP"
+    red    "6. Change domain and issue new certificates"
+    red    "7. Change v2ray UUID & path"
+    green  "8. Set v2ray upsteram"
+    yellow "9. Update Pi-hole"
+    yellow "0. Update de_GWD"
+    green  "11.Print v2ray node information"
+    red    "00.AutoUpdate turn on/off"
     red    "CTRL+C EXIT"
     echo ""
     read -p "Select:" num
@@ -1149,7 +1393,39 @@ blue "-----------------------------------------------"
     start_menu
     ;;
     2)
+    installBBRplus
+    start_menu
+    ;;
+    5)
+    changeStaticIP
+    start_menu
+    ;;
+    6)
+    changeDomain
+    start_menu
+    ;;
+    7)
+    changeV2rayVerify
+    start_menu
+    ;;
+    8)
+    changev2rayupstream
+    start_menu
+    ;;
+    9)
+    updatePihole
+    start_menu
+    ;;
+    0)
     updateGWD
+    start_menu
+    ;;
+    11)
+    printNode
+    start_menu
+    ;;
+    00)
+    autoUpdateGWD
     start_menu
     ;;
     *)
