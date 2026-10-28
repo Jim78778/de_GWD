@@ -442,11 +442,12 @@ chmod +x /usr/local/bin/vtrui/vtrui
 chmod +x /usr/local/bin/vtrui/v2ctl
 rm -rf ~/vtrui*
 
+localHostIP="127.0.0.1"
 cat << EOF >/usr/local/bin/v2dns/config.json
 {
 "dns":{
-  "hosts":{"localhost":"127.0.0.1"},
-  "servers":[{"address":"127.00.1","port":5380}]
+  "hosts":{"localhost":"${localHostIP}"},
+  "servers":[{"address":"${localHostIP}","port":5380}]
 },
 "inbounds":[
   {
