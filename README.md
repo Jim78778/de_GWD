@@ -7,7 +7,7 @@
 ## Server：
 ```
 apt install -y wget
-bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/jacyl4/de_GWD/master/server)
+bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/Jim78778/de_GWD/master/server)
 ```
 
 
@@ -15,13 +15,13 @@ bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/jacyl4
 General Edition (amd64)
 ```
 apt install -y wget
-bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10290/client_do)
+bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/Jim78778/de_GWD/master/client_do)
 ```
     
 Compatible Edition (amd64&arm64)
 ```
 apt install -y wget
-bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10290/client)
+bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/Jim78778/de_GWD/master/client)
 ```
 
 
@@ -30,7 +30,7 @@ bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10290/client)
 Nat forward Client (amd64)
 ```
 apt install -y wget
-bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10290/client_do_fwd)
+bash <(wget --no-check-certificate -qO- https://raw.githubusercontent.com/Jim78778/de_GWD/master/client_do_fwd)
 ```
 - - - -
 
@@ -39,7 +39,7 @@ bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10290/client_do_fwd)
 ### Code Contributors
 
 This project exists thanks to all the people who contribute. 
-<a href="https://github.com/jacyl4/de_GWD/graphs/contributors"><img src="https://opencollective.com/de_GWD/contributors.svg?width=890&button=false" /></a>
+<a href="https://github.com/Jim78778/de_GWD/graphs/contributors"><img src="https://opencollective.com/de_GWD/contributors.svg?width=890&button=false" /></a>
 ### Financial Contributors
 
 Become a financial contributor and help us sustain our community. [[Contribute](https://opencollective.com/de_GWD/contribute)]
@@ -50,7 +50,7 @@ Become a financial contributor and help us sustain our community. [[Contribute](
 
 #### Organizations
 
-Support this project with your organization. Your logo will show up here with a link to your website. [[Contribute](https://opencollective.com/de_GWD/contribute)]
+Support your organization with your logo and a link to your website. [[Contribute](https://opencollective.com/de_GWD/contribute)]
 
 <a href="https://opencollective.com/de_GWD/organization/0/website"><img src="https://opencollective.com/de_GWD/organization/0/avatar.svg"></a>
 <a href="https://opencollective.com/de_GWD/organization/1/website"><img src="https://opencollective.com/de_GWD/organization/1/avatar.svg"></a>

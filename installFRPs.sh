@@ -10,9 +10,14 @@ FRPbindPort=$1
 FRPtoken=$2
 FRPbindProtocol=$3
 
-installCMD="bash <(wget --no-check-certificate -qO- http://gwd.seso.icu:10290/client_do)"
+# ===== 本仓库地址（不再依赖已失效的镜像站 gwd.seso.icu）=====
+repoOwner="Jim78778"
+repoName="de_GWD"
+branch="master"
+repoRoot="https://raw.githubusercontent.com/${repoOwner}/${repoName}/${branch}"
+repoRes="${repoRoot}/resource"
 
-mirrorSite=$(echo $installCMD | awk '{print$5}' | sed 's?/client_do)??')
+mirrorSite="$repoRoot"
 
 
 
@@ -28,7 +33,7 @@ fi
 
 installFRPs(){
 cd ~
-wget --no-check-certificate -O ~/frp.tar.gz $mirrorSite/frp_linux_amd64.tar.gz
+wget --no-check-certificate -O ~/frp.tar.gz $repoRes/frp_linux_amd64.tar.gz
 tar zxvf ~/frp.tar.gz
 
 mkdir -p /usr/local/bin/frp
