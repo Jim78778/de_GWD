@@ -885,7 +885,7 @@ cd ~
 v2uuids=$(cat /proc/sys/kernel/random/uuid)
 v2path="/$(echo $v2uuids | awk '{print substr($0,length($1)-5)}')"
 
-ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print$2}' | cut -d':' -f1 | cut -d'@' -f1 | awk 'NR==1{print}')
+ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print $2}' | cut -d':' -f1 | cut -d'@' -f1 | awk 'NR==1{print}')
 localaddr=$(ip a | grep "$ethernetnum" | awk '{print $2}' | awk 'END {print}' | cut -d'/' -f1)
 gatewayaddr=$(ip route show | awk '/'$ethernetnum'/ {print$3;exit}')
 
@@ -971,7 +971,7 @@ update-grub
 
 cat << EOF >~/bbrkernel/clearkernel
 #!/bin/bash
-PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin/bin'
+PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 sed -i "/net.core.default_qdisc/d" /etc/sysctl.conf
 sed -i "/net.ipv4.tcp_congestion_control/d" /etc/sysctl.conf
@@ -982,6 +982,7 @@ sysctl -p
 crontab -l > ~/now.cron
 sed -i '/clearkernel/d' ~/now.cron
 crontab ~/now.cron
+rm -rf ~/now.cron
 rm -rf ~/bbrkernel
 
 systemctl restart sshd
@@ -1270,7 +1271,7 @@ nginxWebConf
 postInstall
 
 blue "---------------------"
-blue "Update de_GWD [done]"
+blue  "Update de_GWD [done]"
 blue "---------------------"
 }
 
