@@ -24,6 +24,29 @@ mirrorSite="$repoRoot"
 smartdns_arm64="$repoRes/smartdns.1.2020.05.04-0005.aarch64-debian-all.deb"
 smartdns_amd64="$repoRes/smartdns.1.2020.05.04-0005.x86_64-debian-all.deb"
 
+# ===== apt 源兼容性 =====
+# buster 及更早版本已 EOL、主镜像已下线，需走 archive；
+# bullseye 起 security suite 命名由 "codename/updates" 改为 "codename-security"。
+codename=$(sed -n 's/^VERSION="[0-9]* (\(.*\))"/\1/p' /etc/os-release)
+case "$codename" in
+  jessie|stretch|buster)
+    aptArchived=1
+    aptMain_aliyun="http://mirrors.aliyun.com/debian-archive/debian"
+    aptSec_aliyun="http://mirrors.aliyun.com/debian-archive/debian-security"
+    aptMain_deb="http://archive.debian.org/debian"
+    aptSec_deb="http://archive.debian.org/debian-security"
+    secSuite="${codename}/updates"
+    ;;
+  *)
+    aptArchived=0
+    aptMain_aliyun="http://mirrors.aliyun.com/debian"
+    aptSec_aliyun="http://mirrors.aliyun.com/debian-security"
+    aptMain_deb="http://deb.debian.org/debian"
+    aptSec_deb="http://deb.debian.org/debian-security"
+    secSuite="${codename}-security"
+    ;;
+esac
+
 # 下载 WebUI 所需的 ui-script / ui-web（GitHub 已移除 SVN 支持，改用 git）。
 # 优先 partial clone 仅拉取所需目录（约11MB）；失败则回退整包 tarball。
 fetchUI(){
@@ -94,9 +117,9 @@ EOF
 rm -rf /etc/apt/sources.list.d/*
 if [[ $architecture = "amd64" ]]; then
 cat << EOF >/etc/apt/sources.list
-deb http://mirrors.aliyun.com/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main contrib non-free
-deb http://mirrors.aliyun.com/debian-security $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)/updates main contrib non-free
-deb http://mirrors.aliyun.com/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)-updates main contrib non-free
+deb $aptMain_aliyun $codename main contrib non-free
+deb $aptSec_aliyun $secSuite main contrib non-free
+deb $aptMain_aliyun $codename-updates main contrib non-free
 EOF
 fi
 
@@ -183,7 +206,7 @@ net.ipv4.tcp_low_latency = 1
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.neigh.default.gc_thresh1 = 1024
 net.ipv4.neigh.default.gc_thresh2 = 2048
-net.ipv4.neigh.default.gc_thresh3 = 4096
+net.ipv4.neigh.default.gc_thresh3 = 4095
 EOF
 
 sed -i "/net.core.default_qdisc/d" /etc/sysctl.conf
@@ -787,9 +810,9 @@ echo ""
 installDep(){
 if [[ $architecture = "amd64" ]]; then
 cat << EOF >/etc/apt/sources.list
-deb http://deb.debian.org/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1) main contrib non-free
-deb http://deb.debian.org/debian-security/ $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)/updates main contrib non-free
-deb http://deb.debian.org/debian $(cat /etc/os-release | grep VERSION= | cut -d'(' -f2 | cut -d')' -f1)-updates main contrib non-free
+deb $aptMain_deb $codename main contrib non-free
+deb $aptSec_deb $secSuite main contrib non-free
+deb $aptMain_deb $codename-updates main contrib non-free
 EOF
 fi
 
@@ -924,8 +947,8 @@ systemctl daemon-reload >/dev/null 2>&1
 fi
 
 popupWindow="window.open('"http://$localaddr:3000"', 'popupWindow', 'width=800, height=600, scrollbars=yes');"
-sed -i "/popupWindow/c\\$popupWindow" /var/www/html/!ddns.php
-sed -i "/popupWindow/c\\$popupWindow" /var/www/html/!update.php
+sed -i "/popupWindow/c\$popupWindow" /var/www/html/!ddns.php
+sed -i "/popupWindow/c\$popupWindow" /var/www/html/!update.php
 }
 
 
