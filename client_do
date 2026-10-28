@@ -372,7 +372,7 @@ systemctl stop doh-client >/dev/null 2>&1
 rm -rf /usr/local/bin/doh-client
 
 doh1Domain=$(echo $doh1 | cut -d/ -f1 | cut -d: -f1)
-doh2Domain=$(echo $doh2 | cut -d/ -1 | cut -d: -f1)
+doh2Domain=$(echo $doh2 | cut -d/ -f1 | cut -d: -f1)
 doh1IP=$(dig $doh1Domain +short | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$')
 doh2IP=$(dig $doh2Domain +short | grep -E '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$')
 
@@ -1177,7 +1177,7 @@ wget --no-check-certificate -c -O ~/ttyd ${repoRes}/ttyd_linux.x86_64
 
 if [ $(ls -l ~/ttyd | awk '{print$5}') -gt 2000000 ]; then
 mv -f ~/ttyd /usr/local/bin/ttyd
-chmod +x /ttyd
+chmod +x /usr/local/bin/ttyd
 
 cat << EOF >/lib/systemd/system/updateGWD.service
 [Unit]
@@ -1278,7 +1278,7 @@ doh2=$doh1
 domain=$(echo $v2servn | cut -d: -f1)
 port=$(echo $v2servn | cut -d: -f2)
 portCheck=$(echo $port | grep '^[0-9]\+$')
-if [[ -z $portportCheck ]]; then
+if [[ -z $portCheck ]]; then
 port="443"
 fi
 
@@ -1316,7 +1316,7 @@ sed -i 's/<br>//g' ~/china.html
 mv -f ~/china.html /usr/local/bin/IPchnroute
 cp -f /usr/local/bin/IPchnroute /usr/local/bin/chnrouteSET
 sed -i 's/^/add chnroute &/g' /usr/local/bin/chnrouteSET
-sed -i '1i\create chnroute hash:net hashsize 2048 maxelem 65535' /usr/local/bin/chnrouteSET
+sed -i '1i\create chnroute hash:net family inet hashsize 2048 maxelem 65535' /usr/local/bin/chnrouteSET
 
 installIptablesProxy
 
@@ -1584,7 +1584,7 @@ else
     echo "[$statusBAD] V2DNS          [start failed]"
 fi
 
-if [[ $(systemctl is-active vtrui) = "[active" ]]; then
+if [[ $(systemctl is-active vtrui) = "active" ]]; then
     echo "[$statusGOOD] V2RAY          [working]"
 elif [[ ! -d "/usr/local/bin/vtrui" ]]; then
     echo "[$statusBAD] V2RAY          [not Installed]"
