@@ -532,7 +532,7 @@ cat << EOF >/usr/local/bin/vtrui/config.json
 "inbounds":[
   {
     "port":9896,
-    "="127.0.0.1",
+    "listen":"127.0.0.1",
     "protocol":"dokodemo-door",
     "settings":{"network":"tcp,udp","followRedirect":true},
     "streamSettings":{"sockopt":{"tproxy":"tproxy"}}
@@ -635,7 +635,7 @@ lanip="0.0.0.0/8 \
 169.254.0.0/16 \
 10.0.0.0/8 \
 172.16.0.0/12 \
-192.160.0.0/16 \
+192.168.0.0/16 \
 255.255.255.255/32 \
 8.8.8.8/32 \
 8.8.4.4/32 \
