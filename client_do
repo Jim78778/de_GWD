@@ -1234,7 +1234,7 @@ cd ~
 doh2=$doh1
 
 domain=$(echo $v2servn | cut -d: -f1)
-port=$(echo $v2servn | cut -d: -f2)
+port=$(echo $v2servn | cut -d: -2)
 portCheck=$(echo $port | grep '^[0-9]\+$')
 if [[ -z $portCheck ]]; then
 port="443"
@@ -1245,7 +1245,7 @@ ethernetnum=$(ip --oneline link show up | grep -v "lo" | awk '{print$2;exit}' | 
 piholePW="0000000000000000000000000000000000000000000000000000000000000000"
 
 cat << EOF >/etc/network/interfaces
-source /etc/network interfaces.d/*
+source /etc/network/interfaces.d/*
 
 auto lo
 iface lo inet loopback
